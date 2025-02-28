@@ -19,7 +19,7 @@ module Dependabot
     sig do
       params(
         url: String,
-        headers: T::Hash[Symbol, T.untyped],
+        headers: T::Hash[T.any(String, Symbol), T.untyped],
         options: T::Hash[Symbol, T.untyped]
       )
         .returns(Excon::Response)
@@ -30,7 +30,8 @@ module Dependabot
       Excon.get(
         url,
         idempotent: true,
-        **SharedHelpers.excon_defaults({ headers: headers }.merge(options))
+        **SharedHelpers.excon_defaults({ headers: headers }.merge(options)),
+        retry_interval: 5
       )
     rescue Excon::Error::Timeout => e
       cache_error(url, e)
@@ -40,7 +41,7 @@ module Dependabot
     sig do
       params(
         url: String,
-        headers: T::Hash[Symbol, T.untyped],
+        headers: T::Hash[T.any(String, Symbol), T.untyped],
         options: T::Hash[Symbol, T.untyped]
       )
         .returns(Excon::Response)

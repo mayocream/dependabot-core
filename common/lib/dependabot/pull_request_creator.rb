@@ -3,6 +3,7 @@
 
 require "sorbet-runtime"
 require "dependabot/metadata_finders"
+require "dependabot/credential"
 
 module Dependabot
   class PullRequestCreator
@@ -38,6 +39,8 @@ module Dependabot
     class NoHistoryInCommon < StandardError; end
 
     class UnmergedPRExists < StandardError; end
+
+    class BranchAlreadyExists < StandardError; end
 
     class BaseCommitNotUpToDate < StandardError; end
 
@@ -76,7 +79,7 @@ module Dependabot
     sig { returns(String) }
     attr_reader :base_commit
 
-    sig { returns(T::Array[T::Hash[String, String]]) }
+    sig { returns(T::Array[Dependabot::Credential]) }
     attr_reader :credentials
 
     sig { returns(T.nilable(String)) }
@@ -100,13 +103,18 @@ module Dependabot
     sig { returns(T::Hash[String, String]) }
     attr_reader :vulnerabilities_fixed
 
-    sig { returns(T.nilable(T::Array[String])) }
+    AzureReviewers = T.type_alias { T.nilable(T::Array[String]) }
+    GithubReviewers = T.type_alias { T.nilable(T::Hash[String, T::Array[String]]) }
+    GitLabReviewers = T.type_alias { T.nilable(T::Hash[Symbol, T::Array[Integer]]) }
+    Reviewers = T.type_alias { T.any(AzureReviewers, GithubReviewers, GitLabReviewers) }
+
+    sig { returns(Reviewers) }
     attr_reader :reviewers
 
-    sig { returns(T.nilable(T::Array[String])) }
+    sig { returns(T.nilable(T.any(T::Array[String], T::Array[Integer]))) }
     attr_reader :assignees
 
-    sig { returns(T.nilable(String)) }
+    sig { returns(T.nilable(T.any(T::Array[String], Integer))) }
     attr_reader :milestone
 
     sig { returns(String) }
@@ -142,7 +150,7 @@ module Dependabot
         base_commit: String,
         dependencies: T::Array[Dependabot::Dependency],
         files: T::Array[Dependabot::DependencyFile],
-        credentials: T::Array[T::Hash[String, String]],
+        credentials: T::Array[Dependabot::Credential],
         pr_message_header: T.nilable(String),
         pr_message_footer: T.nilable(String),
         custom_labels: T.nilable(T::Array[String]),
@@ -150,9 +158,9 @@ module Dependabot
         signature_key: T.nilable(String),
         commit_message_options: T::Hash[Symbol, T.untyped],
         vulnerabilities_fixed: T::Hash[String, String],
-        reviewers: T.nilable(T::Array[String]),
-        assignees: T.nilable(T::Array[String]),
-        milestone: T.nilable(String),
+        reviewers: Reviewers,
+        assignees: T.nilable(T.any(T::Array[String], T::Array[Integer])),
+        milestone: T.nilable(T.any(T::Array[String], Integer)),
         branch_name_separator: String,
         branch_name_prefix: String,
         branch_name_max_length: T.nilable(Integer),
@@ -175,10 +183,9 @@ module Dependabot
                    pr_message_header: nil, pr_message_footer: nil,
                    custom_labels: nil, author_details: nil, signature_key: nil,
                    commit_message_options: {}, vulnerabilities_fixed: {},
-                   reviewers: nil, assignees: nil, milestone: nil,
-                   branch_name_separator: "/", branch_name_prefix: "dependabot",
-                   branch_name_max_length: nil, label_language: false,
-                   automerge_candidate: false,
+                   reviewers: nil, assignees: nil, milestone: nil, branch_name_separator: "/",
+                   branch_name_prefix: "dependabot", branch_name_max_length: nil,
+                   label_language: false, automerge_candidate: false,
                    github_redirection_service: DEFAULT_GITHUB_REDIRECTION_SERVICE,
                    custom_headers: nil, require_up_to_date_base: false,
                    provider_metadata: {}, message: nil, dependency_group: nil, pr_message_max_length: nil,
@@ -264,15 +271,15 @@ module Dependabot
         base_commit: base_commit,
         credentials: credentials,
         files: files,
-        commit_message: message.commit_message,
-        pr_description: message.pr_message,
-        pr_name: message.pr_name,
+        commit_message: T.must(message.commit_message),
+        pr_description: T.must(message.pr_message),
+        pr_name: T.must(message.pr_name),
         author_details: author_details,
         signature_key: signature_key,
         labeler: labeler,
-        reviewers: reviewers,
-        assignees: assignees,
-        milestone: milestone,
+        reviewers: T.cast(reviewers, GithubReviewers),
+        assignees: T.cast(assignees, T.nilable(T::Array[String])),
+        milestone: T.cast(milestone, T.nilable(Integer)),
         custom_headers: custom_headers,
         require_up_to_date_base: require_up_to_date_base?
       )
@@ -286,15 +293,15 @@ module Dependabot
         base_commit: base_commit,
         credentials: credentials,
         files: files,
-        commit_message: message.commit_message,
-        pr_description: message.pr_message,
-        pr_name: message.pr_name,
+        commit_message: T.must(message.commit_message),
+        pr_description: T.must(message.pr_message),
+        pr_name: T.must(message.pr_name),
         author_details: author_details,
         labeler: labeler,
-        approvers: reviewers,
-        assignees: assignees,
+        approvers: T.cast(reviewers, T.nilable(T::Hash[Symbol, T::Array[Integer]])),
+        assignees: T.cast(assignees, T.nilable(T::Array[Integer])),
         milestone: milestone,
-        target_project_id: provider_metadata&.fetch(:target_project_id)
+        target_project_id: T.cast(provider_metadata&.fetch(:target_project_id, nil), T.nilable(Integer))
       )
     end
 
@@ -306,14 +313,14 @@ module Dependabot
         base_commit: base_commit,
         credentials: credentials,
         files: files,
-        commit_message: message.commit_message,
-        pr_description: message.pr_message,
-        pr_name: message.pr_name,
+        commit_message: T.must(message.commit_message),
+        pr_description: T.must(message.pr_message),
+        pr_name: T.must(message.pr_name),
         author_details: author_details,
         labeler: labeler,
-        reviewers: reviewers,
-        assignees: assignees,
-        work_item: provider_metadata&.fetch(:work_item, nil)
+        reviewers: T.cast(reviewers, AzureReviewers),
+        assignees: T.cast(assignees, T.nilable(T::Array[String])),
+        work_item: T.cast(provider_metadata&.fetch(:work_item, nil), T.nilable(Integer))
       )
     end
 
@@ -325,12 +332,12 @@ module Dependabot
         base_commit: base_commit,
         credentials: credentials,
         files: files,
-        commit_message: message.commit_message,
-        pr_description: message.pr_message,
-        pr_name: message.pr_name,
+        commit_message: T.must(message.commit_message),
+        pr_description: T.must(message.pr_message),
+        pr_name: T.must(message.pr_name),
         author_details: author_details,
         labeler: nil,
-        work_item: provider_metadata&.fetch(:work_item, nil)
+        work_item: T.cast(provider_metadata&.fetch(:work_item, nil), T.nilable(Integer))
       )
     end
 
@@ -342,9 +349,9 @@ module Dependabot
         base_commit: base_commit,
         credentials: credentials,
         files: files,
-        commit_message: message.commit_message,
-        pr_description: message.pr_message,
-        pr_name: message.pr_name,
+        commit_message: T.must(message.commit_message),
+        pr_description: T.must(message.pr_message),
+        pr_name: T.must(message.pr_name),
         author_details: author_details,
         labeler: labeler,
         require_up_to_date_base: require_up_to_date_base?
@@ -389,7 +396,7 @@ module Dependabot
         BranchNamer.new(
           dependencies: dependencies,
           files: files,
-          target_branch: T.must(source.branch),
+          target_branch: source.branch,
           dependency_group: dependency_group,
           separator: branch_name_separator,
           prefix: branch_name_prefix,

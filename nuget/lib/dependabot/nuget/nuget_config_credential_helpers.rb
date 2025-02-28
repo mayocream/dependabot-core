@@ -1,18 +1,25 @@
-# typed: true
+# typed: strong
 # frozen_string_literal: true
+
+require "sorbet-runtime"
 
 module Dependabot
   module Nuget
     module NuGetConfigCredentialHelpers
+      extend T::Sig
+
+      sig { returns(String) }
       def self.user_nuget_config_path
         home_directory = Dir.home
         File.join(home_directory, ".nuget", "NuGet", "NuGet.Config")
       end
 
+      sig { returns(String) }
       def self.temporary_nuget_config_path
         user_nuget_config_path + "_ORIGINAL"
       end
 
+      sig { params(credentials: T::Array[Dependabot::Credential]).void }
       def self.add_credentials_to_nuget_config(credentials)
         return unless File.exist?(user_nuget_config_path)
 
@@ -48,6 +55,7 @@ module Dependabot
         File.write(user_nuget_config_path, nuget_config)
       end
 
+      sig { void }
       def self.restore_user_nuget_config
         return unless File.exist?(temporary_nuget_config_path)
 
@@ -55,17 +63,26 @@ module Dependabot
         File.rename(temporary_nuget_config_path, user_nuget_config_path)
       end
 
-      # rubocop:disable Lint/SuppressedException
+      sig { params(credentials: T::Array[Dependabot::Credential], _block: T.proc.void).void }
       def self.patch_nuget_config_for_action(credentials, &_block)
         add_credentials_to_nuget_config(credentials)
         begin
           yield
-        rescue StandardError
+        rescue DependabotError
+          # forward these
+          raise
+        rescue StandardError => e
+          log_message =
+            <<~LOG_MESSAGE
+              Block argument of NuGetConfigCredentialHelpers::patch_nuget_config_for_action causes an exception #{e}:
+              #{e.message}
+            LOG_MESSAGE
+          Dependabot.logger.error(log_message)
+          puts log_message
         ensure
           restore_user_nuget_config
         end
       end
-      # rubocop:enable Lint/SuppressedException
     end
   end
 end

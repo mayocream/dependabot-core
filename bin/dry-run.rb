@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 # This script executes a full update run for a given repo (optionally for a
@@ -32,9 +32,13 @@
 # - elm
 # - submodules
 # - docker
+# - docker_compose
 # - terraform
 # - pub
 # - swift
+# - devcontainers
+# - dotnet_sdk
+# - bun
 
 # rubocop:disable Style/GlobalVars
 
@@ -48,11 +52,15 @@ unless Etc.getpwuid(Process.uid).name == "dependabot" || ENV["ALLOW_DRY_RUN_STAN
   exit 1
 end
 
+$LOAD_PATH << "./bun/lib"
 $LOAD_PATH << "./bundler/lib"
 $LOAD_PATH << "./cargo/lib"
 $LOAD_PATH << "./common/lib"
 $LOAD_PATH << "./composer/lib"
+$LOAD_PATH << "./devcontainers/lib"
 $LOAD_PATH << "./docker/lib"
+$LOAD_PATH << "./docker_compose/lib"
+$LOAD_PATH << "./dotnet_sdk/lib"
 $LOAD_PATH << "./elm/lib"
 $LOAD_PATH << "./git_submodules/lib"
 $LOAD_PATH << "./github_actions/lib"
@@ -66,6 +74,7 @@ $LOAD_PATH << "./python/lib"
 $LOAD_PATH << "./pub/lib"
 $LOAD_PATH << "./swift/lib"
 $LOAD_PATH << "./terraform/lib"
+$LOAD_PATH << "./uv/lib"
 
 updater_image_gemfile = File.expand_path("../dependabot-updater/Gemfile", __dir__)
 updater_repo_gemfile = File.expand_path("../updater/Gemfile", __dir__)
@@ -84,6 +93,7 @@ require "stackprof"
 
 Dependabot.logger = Logger.new($stdout)
 
+require "dependabot/credential"
 require "dependabot/file_fetchers"
 require "dependabot/file_parsers"
 require "dependabot/update_checkers"
@@ -92,10 +102,14 @@ require "dependabot/pull_request_creator"
 require "dependabot/config/file_fetcher"
 require "dependabot/simple_instrumentor"
 
+require "dependabot/bun"
 require "dependabot/bundler"
 require "dependabot/cargo"
 require "dependabot/composer"
+require "dependabot/devcontainers"
 require "dependabot/docker"
+require "dependabot/docker_compose"
+require "dependabot/dotnet_sdk"
 require "dependabot/elm"
 require "dependabot/git_submodules"
 require "dependabot/github_actions"
@@ -109,6 +123,7 @@ require "dependabot/python"
 require "dependabot/pub"
 require "dependabot/swift"
 require "dependabot/terraform"
+require "dependabot/uv"
 
 # GitHub credentials with write permission to the repo you want to update
 # (so that you can create a new branch, commit and pull request).
@@ -134,30 +149,38 @@ $options = {
 }
 
 unless ENV["LOCAL_GITHUB_ACCESS_TOKEN"].to_s.strip.empty?
-  $options[:credentials] << {
-    "type" => "git_source",
-    "host" => "github.com",
-    "username" => "x-access-token",
-    "password" => ENV.fetch("LOCAL_GITHUB_ACCESS_TOKEN", nil)
-  }
+  $options[:credentials] << Dependabot::Credential.new(
+    {
+      "type" => "git_source",
+      "host" => "github.com",
+      "username" => "x-access-token",
+      "password" => ENV.fetch("LOCAL_GITHUB_ACCESS_TOKEN", nil)
+    }
+  )
 end
 
 unless ENV["LOCAL_AZURE_ACCESS_TOKEN"].to_s.strip.empty?
   raise "LOCAL_AZURE_ACCESS_TOKEN supplied without LOCAL_AZURE_FEED_URL" unless ENV["LOCAL_AZURE_FEED_URL"]
 
-  $options[:credentials] << {
-    "type" => "nuget_feed",
-    "host" => "pkgs.dev.azure.com",
-    "url" => ENV.fetch("LOCAL_AZURE_FEED_URL", nil),
-    "token" => ":#{ENV.fetch('LOCAL_AZURE_ACCESS_TOKEN', nil)}"
-  }
+  $options[:credentials] << Dependabot::Credential.new(
+    {
+      "type" => "nuget_feed",
+      "host" => "pkgs.dev.azure.com",
+      "url" => ENV.fetch("LOCAL_AZURE_FEED_URL", nil),
+      "token" => ":#{ENV.fetch('LOCAL_AZURE_ACCESS_TOKEN', nil)}"
+    }
+  )
 end
 
 unless ENV["LOCAL_CONFIG_VARIABLES"].to_s.strip.empty?
   # For example:
   # "[{\"type\":\"npm_registry\",\"registry\":\
   #     "registry.npmjs.org\",\"token\":\"123\"}]"
-  $options[:credentials].concat(JSON.parse(ENV.fetch("LOCAL_CONFIG_VARIABLES", nil)))
+  $options[:credentials].concat(
+    JSON.parse(ENV.fetch("LOCAL_CONFIG_VARIABLES", nil)).map do |data|
+      Dependabot::Credential.new(data)
+    end
+  )
 end
 
 unless ENV["SECURITY_ADVISORIES"].to_s.strip.empty?
@@ -258,6 +281,10 @@ option_parse = OptionParser.new do |opts|
   opts.on("--pull-request",
           "Output pull request information metadata: title, description") do
     $options[:pull_request] = true
+  end
+
+  opts.on("--enable-beta-ecosystems", "Enable beta ecosystems") do |_value|
+    Dependabot::Experiments.register(:enable_beta_ecosystems, true)
   end
 end
 # rubocop:enable Metrics/BlockLength
@@ -471,10 +498,7 @@ $source = Dependabot::Source.new(
   commit: $options[:commit]
 )
 
-always_clone = Dependabot::Utils
-               .always_clone_for_package_manager?($package_manager)
-vendor_dependencies = $options[:vendor_dependencies]
-$repo_contents_path = File.expand_path(File.join("tmp", $repo_name.split("/"))) if vendor_dependencies || always_clone
+$repo_contents_path = File.expand_path(File.join("tmp", $repo_name.split("/")))
 
 fetcher_args = {
   source: $source,

@@ -1,8 +1,9 @@
-# typed: strict
+# typed: strong
 # frozen_string_literal: true
 
 require "sorbet-runtime"
 require "dependabot/source"
+require "dependabot/credential"
 
 module Dependabot
   module MetadataFinders
@@ -14,18 +15,18 @@ module Dependabot
       require "dependabot/metadata_finders/base/release_finder"
       require "dependabot/metadata_finders/base/commits_finder"
 
-      PACKAGE_MANAGERS_WITH_RELIABLE_DIRECTORIES = T.let(%w(npm_and_yarn pub).freeze, T::Array[String])
+      PACKAGE_MANAGERS_WITH_RELIABLE_DIRECTORIES = T.let(%w(bun npm_and_yarn pub).freeze, T::Array[String])
 
       sig { returns(Dependabot::Dependency) }
       attr_reader :dependency
 
-      sig { returns(T::Array[T::Hash[String, String]]) }
+      sig { returns(T::Array[Dependabot::Credential]) }
       attr_reader :credentials
 
       sig do
         params(
           dependency: Dependabot::Dependency,
-          credentials: T::Array[T::Hash[String, String]]
+          credentials: T::Array[Dependabot::Credential]
         )
           .void
       end
@@ -175,7 +176,7 @@ module Dependabot
         @source = T.let(look_up_source, T.nilable(Dependabot::Source))
       end
 
-      sig { overridable.returns(Dependabot::Source) }
+      sig { overridable.returns(T.nilable(Dependabot::Source)) }
       def look_up_source
         raise NotImplementedError
       end

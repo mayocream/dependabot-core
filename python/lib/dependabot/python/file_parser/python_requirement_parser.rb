@@ -60,6 +60,12 @@ module Dependabot
           return unless pyproject
 
           pyproject_object = TomlRB.parse(pyproject.content)
+
+          # Check for PEP621 requires-python
+          pep621_python = pyproject_object.dig("project", "requires-python")
+          return pep621_python if pep621_python
+
+          # Fallback to Poetry configuration
           poetry_object = pyproject_object.dig("tool", "poetry")
 
           poetry_object&.dig("dependencies", "python") ||
@@ -83,7 +89,12 @@ module Dependabot
         def python_version_file_version
           return unless python_version_file
 
-          file_version = python_version_file.content.strip
+          # read the content, split into lines and remove any lines with '#'
+          content_lines = python_version_file.content.each_line.map do |line|
+            line.sub(/#.*$/, " ").strip
+          end.reject(&:empty?)
+
+          file_version = content_lines.first
           return if file_version&.empty?
           return unless pyenv_versions.include?("#{file_version}\n")
 

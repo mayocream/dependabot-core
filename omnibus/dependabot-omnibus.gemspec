@@ -26,11 +26,15 @@ Gem::Specification.new do |spec|
   spec.require_path = "lib"
   spec.files        = ["lib/dependabot/omnibus.rb"]
 
+  spec.add_dependency "dependabot-bun", Dependabot::VERSION
   spec.add_dependency "dependabot-bundler", Dependabot::VERSION
   spec.add_dependency "dependabot-cargo", Dependabot::VERSION
   spec.add_dependency "dependabot-common", Dependabot::VERSION
   spec.add_dependency "dependabot-composer", Dependabot::VERSION
+  spec.add_dependency "dependabot-devcontainers", Dependabot::VERSION
   spec.add_dependency "dependabot-docker", Dependabot::VERSION
+  spec.add_dependency "dependabot-docker_compose", Dependabot::VERSION
+  spec.add_dependency "dependabot-dotnet_sdk", Dependabot::VERSION
   spec.add_dependency "dependabot-elm", Dependabot::VERSION
   spec.add_dependency "dependabot-github_actions", Dependabot::VERSION
   spec.add_dependency "dependabot-git_submodules", Dependabot::VERSION
@@ -44,6 +48,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "dependabot-python", Dependabot::VERSION
   spec.add_dependency "dependabot-swift", Dependabot::VERSION
   spec.add_dependency "dependabot-terraform", Dependabot::VERSION
+  spec.add_dependency "dependabot-uv", Dependabot::VERSION
 
   common_gemspec.development_dependencies.each do |dep|
     spec.add_development_dependency dep.name, *dep.requirement.as_list

@@ -10,9 +10,21 @@
 - changed-files:
   - any-glob-to-any-file: composer/**
 
+"L: devcontainers":
+- changed-files:
+  - any-glob-to-any-file: devcontainers/**
+
 "L: docker":
 - changed-files:
   - any-glob-to-any-file: docker/**
+
+"L: docker:compose":
+- changed-files:
+  - any-glob-to-any-file: docker_compose/**
+
+"L: dotnet-sdk":
+- changed-files:
+  - any-glob-to-any-file: dotnet_sdk/**
 
 "L: elm":
 - changed-files:
@@ -32,7 +44,9 @@
 
 "L: javascript":
 - changed-files:
-  - any-glob-to-any-file: npm_and_yarn/**
+  - any-glob-to-any-file:
+    - bun/**
+    - npm_and_yarn/**
 
 "L: java:gradle":
 - changed-files:
@@ -57,6 +71,10 @@
 "L: python":
 - changed-files:
   - any-glob-to-any-file: python/**
+
+"L: python:uv":
+- changed-files:
+  - any-glob-to-any-file: uv/**
 
 "L: terraform":
 - changed-files:

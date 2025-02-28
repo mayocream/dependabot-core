@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "json"
@@ -34,7 +34,6 @@ module Dependabot
         MISSING_IMPLICIT_PLATFORM_REQ_REGEX =
           %r{
             (?<!with|for|by)\sext\-[^\s\/]+\s.*?\s(?=->)|
-            (?<=requires\s)php(?:\-[^\s\/]+)?\s.*?\s(?=->)| # composer v1
             (?<=require\s)php(?:\-[^\s\/]+)?\s.*?\s(?=->) # composer v2
           }x
         VERSION_REGEX = /[0-9]+(?:\.[A-Za-z0-9\-_]+)*/
@@ -49,6 +48,7 @@ module Dependabot
           @requirements_to_unlock       = requirements_to_unlock
           @latest_allowable_version     = latest_allowable_version
           @composer_platform_extensions = initial_platform
+          @error_handler                = ComposerErrorHandler.new
         end
 
         def latest_resolvable_version
@@ -57,9 +57,13 @@ module Dependabot
 
         private
 
-        attr_reader :credentials, :dependency, :dependency_files,
-                    :requirements_to_unlock, :latest_allowable_version,
-                    :composer_platform_extensions
+        attr_reader :credentials
+        attr_reader :dependency
+        attr_reader :dependency_files
+        attr_reader :requirements_to_unlock
+        attr_reader :latest_allowable_version
+        attr_reader :composer_platform_extensions
+        attr_reader :error_handler
 
         def fetch_latest_resolvable_version
           version = fetch_latest_resolvable_version_string
@@ -105,7 +109,7 @@ module Dependabot
 
         def write_dependency_file(unlock_requirement:)
           File.write(
-            "composer.json",
+            PackageManager::MANIFEST_FILENAME,
             prepared_composer_json_content(
               unlock_requirement: unlock_requirement
             )
@@ -120,11 +124,11 @@ module Dependabot
         end
 
         def write_lockfile
-          File.write("composer.lock", lockfile.content) if lockfile
+          File.write(PackageManager::LOCKFILE_FILENAME, lockfile.content) if lockfile
         end
 
         def write_auth_file
-          File.write("auth.json", auth_json.content) if auth_json
+          File.write(PackageManager::AUTH_FILENAME, auth_json.content) if auth_json
         end
 
         def transitory_failure?(error)
@@ -172,9 +176,9 @@ module Dependabot
           composer_platform_extensions.each do |extension, requirements|
             next unless version_for_reqs(requirements)
 
-            json["config"] ||= {}
-            json["config"]["platform"] ||= {}
-            json["config"]["platform"][extension] =
+            json[PackageManager::CONFIG_KEY] ||= {}
+            json[PackageManager::CONFIG_KEY][PackageManager::PLATFORM_KEY] ||= {}
+            json[PackageManager::CONFIG_KEY][PackageManager::PLATFORM_KEY][extension] =
               version_for_reqs(requirements)
           end
 
@@ -235,9 +239,9 @@ module Dependabot
 
           # If the original requirement is just a stability flag we append that
           # flag to the requirement
-          return "<=#{latest_allowable_version}#{lower_bound.strip}" if lower_bound.strip.start_with?("@")
+          return "==#{latest_allowable_version}#{lower_bound.strip}" if lower_bound.strip.start_with?("@")
 
-          lower_bound + ", <= #{latest_allowable_version}"
+          lower_bound + ", == #{latest_allowable_version}"
         end
         # rubocop:enable Metrics/PerceivedComplexity
         # rubocop:enable Metrics/AbcSize
@@ -304,7 +308,10 @@ module Dependabot
 
             # If there *is* a lockfile we can't confidently distinguish between
             # cases where we can't install and cases where we can't update. For
-            # now, we therefore just ignore the dependency.
+            # now, we therefore just ignore the dependency and log the error.
+
+            Dependabot.logger.error(error.message)
+            error.backtrace.each { |line| Dependabot.logger.error(line) }
             nil
           elsif error.message.include?("URL required authentication") ||
                 error.message.include?("403 Forbidden")
@@ -332,11 +339,15 @@ module Dependabot
             # composer.json. In this case we just ignore the dependency.
             nil
           elsif error.message.include?("does not match the expected JSON schema")
-            msg = "Composer failed to parse your composer.json as it does not match the expected JSON schema.\n" \
-                  "Run `composer validate` to check your composer.json and composer.lock files.\n\n" \
+            msg = "Composer failed to parse your #{PackageManager::MANIFEST_FILENAME}" \
+                  "as it does not match the expected JSON schema.\n" \
+                  "Run `composer validate` to check your #{PackageManager::MANIFEST_FILENAME} " \
+                  "and #{PackageManager::LOCKFILE_FILENAME} files.\n\n" \
                   "See https://getcomposer.org/doc/04-schema.md for details on the schema."
             raise Dependabot::DependencyFileNotParseable, msg
           else
+            error_handler.handle_composer_error(error)
+
             raise error
           end
         end
@@ -383,7 +394,7 @@ module Dependabot
           if e.message.match?(MISSING_EXPLICIT_PLATFORM_REQ_REGEX)
             missing_extensions =
               e.message.scan(MISSING_EXPLICIT_PLATFORM_REQ_REGEX)
-               .map do |extension_string|
+               .flatten.flat_map do |extension_string|
                 name, requirement = extension_string.strip.split(" ", 2)
                 { name: name, requirement: requirement }
               end
@@ -392,7 +403,7 @@ module Dependabot
                 implicit_platform_reqs_satisfiable?(e.message)
             missing_extensions =
               e.message.scan(MISSING_IMPLICIT_PLATFORM_REQ_REGEX)
-               .map do |extension_string|
+               .flatten.flat_map do |extension_string|
                 name, requirement = extension_string.strip.split(" ", 2)
                 { name: name, requirement: requirement }
               end
@@ -446,20 +457,22 @@ module Dependabot
         end
 
         def initial_platform
-          platform_php = parsed_composer_file.dig("config", "platform", "php")
+          platform_php = Helpers.capture_platform_php(parsed_composer_file)
 
           platform = {}
-          platform["php"] = [platform_php] if platform_php.is_a?(String) && requirement_valid?(platform_php)
+          if platform_php.is_a?(String) && requirement_valid?(platform_php)
+            platform[Dependabot::Composer::Language::NAME] = [platform_php]
+          end
 
           # NOTE: We *don't* include the require-dev PHP version in our initial
           # platform. If we fail to resolve with the PHP version specified in
           # `require` then it will be picked up in a subsequent iteration.
-          requirement_php = parsed_composer_file.dig("require", "php")
+          requirement_php = Helpers.php_constraint(parsed_composer_file)
           return platform unless requirement_php.is_a?(String)
           return platform unless requirement_valid?(requirement_php)
 
-          platform["php"] ||= []
-          platform["php"] << requirement_php
+          platform[Dependabot::Composer::Language::NAME] ||= []
+          platform[Dependabot::Composer::Language::NAME] << requirement_php
           platform
         end
 
@@ -473,12 +486,12 @@ module Dependabot
 
         def composer_file
           @composer_file ||=
-            dependency_files.find { |f| f.name == "composer.json" }
+            dependency_files.find { |f| f.name == PackageManager::MANIFEST_FILENAME }
         end
 
         def path_dependency_files
           @path_dependency_files ||=
-            dependency_files.select { |f| f.name.end_with?("/composer.json") }
+            dependency_files.select { |f| f.name.end_with?("/#{PackageManager::MANIFEST_FILENAME}") }
         end
 
         def zipped_path_dependency_files
@@ -488,11 +501,11 @@ module Dependabot
 
         def lockfile
           @lockfile ||=
-            dependency_files.find { |f| f.name == "composer.lock" }
+            dependency_files.find { |f| f.name == PackageManager::LOCKFILE_FILENAME }
         end
 
         def auth_json
-          @auth_json ||= dependency_files.find { |f| f.name == "auth.json" }
+          @auth_json ||= dependency_files.find { |f| f.name == PackageManager::AUTH_FILENAME }
         end
 
         def requirement_valid?(req_string)
@@ -510,9 +523,56 @@ module Dependabot
 
         def registry_credentials
           credentials
-            .select { |cred| cred["type"] == "composer_repository" }
+            .select { |cred| cred["type"] == PackageManager::REPOSITORY_KEY }
             .select { |cred| cred["password"] }
         end
+      end
+    end
+
+    class ComposerErrorHandler
+      extend T::Sig
+
+      # Private source errors
+      CURL_ERROR = /curl error 52 while downloading (?<url>.*): Empty reply from server/
+
+      PRIVATE_SOURCE_AUTH_FAIL = [
+        /Could not authenticate against (?<url>.*)/,
+        /The '(?<url>.*)' URL could not be accessed \(HTTP 403\)/,
+        /The "(?<url>.*)" file could not be downloaded/
+      ].freeze
+
+      REQUIREMENT_ERROR = /^(?<req>.*) is invalid, it should not contain uppercase characters/
+
+      NO_URL = "No URL specified"
+
+      def sanitize_uri(url)
+        url = "http://#{url}" unless url.start_with?("http")
+        uri = URI.parse(url)
+        host = T.must(uri.host).downcase
+        host.start_with?("www.") ? host[4..-1] : host
+      end
+
+      # Handles errors with specific to composer error codes
+      sig { params(error: SharedHelpers::HelperSubprocessFailed).void }
+      def handle_composer_error(error)
+        # private source auth errors
+        PRIVATE_SOURCE_AUTH_FAIL.each do |regex|
+          next unless error.message.match?(regex)
+
+          url = T.must(error.message.match(regex)).named_captures["url"]
+          raise Dependabot::PrivateSourceAuthenticationFailure, sanitize_uri(url).empty? ? NO_URL : sanitize_uri(url)
+        end
+
+        # invalid requirement mentioned in manifest file
+        if error.message.match?(REQUIREMENT_ERROR)
+          raise DependencyFileNotResolvable,
+                "Invalid requirement: #{T.must(error.message.match(REQUIREMENT_ERROR)).named_captures['req']}"
+        end
+
+        return unless error.message.match?(CURL_ERROR)
+
+        url = T.must(error.message.match(CURL_ERROR)).named_captures["url"]
+        raise PrivateSourceBadResponse, url
       end
     end
   end

@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 require "open3"
@@ -33,7 +33,11 @@ module Dependabot
         RESOLUTION_IMPOSSIBLE_ERROR = "ResolutionImpossible"
         ERROR_REGEX = /(?<=ERROR\:\W).*$/
 
-        attr_reader :dependency, :dependency_files, :credentials, :repo_contents_path
+        attr_reader :dependency
+        attr_reader :dependency_files
+        attr_reader :credentials
+        attr_reader :repo_contents_path
+        attr_reader :error_handler
 
         def initialize(dependency:, dependency_files:, credentials:, repo_contents_path:)
           @dependency               = dependency
@@ -41,6 +45,7 @@ module Dependabot
           @credentials              = credentials
           @repo_contents_path       = repo_contents_path
           @build_isolation = true
+          @error_handler = PipCompileErrorHandler.new
         end
 
         def latest_resolvable_version(requirement: nil)
@@ -183,6 +188,8 @@ module Dependabot
 
           raise Dependabot::OutOfMemory if message.end_with?("MemoryError")
 
+          error_handler.handle_pipcompile_error(message)
+
           raise
         end
         # rubocop:enable Metrics/AbcSize
@@ -257,7 +264,7 @@ module Dependabot
             .map do |cred|
               authed_url = AuthedUrlBuilder.authed_url(credential: cred)
 
-              if cred["replaces-base"]
+              if cred.replaces_base?
                 "--index-url=#{authed_url}"
               else
                 "--extra-index-url=#{authed_url}"
@@ -410,7 +417,7 @@ module Dependabot
         # If the files we need to update require one another then we need to
         # update them in the right order
         def order_filenames_for_compilation(filenames)
-          ordered_filenames = []
+          ordered_filenames = T.let([], T::Array[String])
 
           while (remaining_filenames = filenames - ordered_filenames).any?
             ordered_filenames +=
@@ -489,6 +496,23 @@ module Dependabot
         def setup_cfg_files
           dependency_files.select { |f| f.name.end_with?("setup.cfg") }
         end
+      end
+    end
+
+    class PipCompileErrorHandler
+      SUBPROCESS_ERROR = /subprocess-exited-with-error/
+
+      INSTALLATION_ERROR = /InstallationError/
+
+      INSTALLATION_SUBPROCESS_ERROR = /InstallationSubprocessError/
+
+      HASH_MISMATCH = /HashMismatch/
+
+      def handle_pipcompile_error(error)
+        return unless error.match?(SUBPROCESS_ERROR) || error.match?(INSTALLATION_ERROR) ||
+                      error.match?(INSTALLATION_SUBPROCESS_ERROR) || error.match?(HASH_MISMATCH)
+
+        raise DependencyFileNotResolvable, "Error resolving dependency"
       end
     end
   end

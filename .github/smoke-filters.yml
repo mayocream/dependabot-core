@@ -7,6 +7,9 @@ common: &common
 github_actions:
   - *common
   - 'github_actions/**'
+bun:
+  - *common
+  - 'bun/**'
 bundler:
   - *common
   - 'bundler/**'
@@ -16,9 +19,15 @@ cargo:
 composer:
   - *common
   - 'composer/**'
+devcontainers:
+  - *common
+  - 'devcontainers/**'
 docker:
   - *common
   - 'docker/**'
+dotnet_sdk:
+  - *common
+  - 'dotnet_sdk/**'
 elm:
   - *common
   - 'elm/**'
@@ -56,3 +65,6 @@ swift:
 terraform:
   - *common
   - 'terraform/**'
+uv:
+  - *common
+  - 'uv/**'

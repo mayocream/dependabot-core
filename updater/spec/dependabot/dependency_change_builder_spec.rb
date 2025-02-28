@@ -3,7 +3,10 @@
 
 require "spec_helper"
 require "dependabot/dependency_change_builder"
+require "dependabot/dependency_file"
 require "dependabot/job"
+
+require "dependabot/bundler"
 
 RSpec.describe Dependabot::DependencyChangeBuilder do
   let(:job) do
@@ -22,7 +25,7 @@ RSpec.describe Dependabot::DependencyChangeBuilder do
                     source: source)
   end
 
-  let(:source) { Dependabot::Source.new(provider: "github", repo: "gocardless/bump") }
+  let(:source) { Dependabot::Source.new(provider: "github", repo: "gocardless/bump", directory: "/.") }
 
   let(:dependency_files) do
     [

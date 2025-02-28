@@ -2,17 +2,20 @@
 --ignore=tmp/
 --ignore=vendor/
 --ignore=.bundle/
+--ignore=bin
 --disable-watchman
 
 # Sorbet doesn't currently support RSpec very well, so we ignore all of our specs.
 # See https://stackoverflow.com/a/76548429
---ignore=bundler/helpers/v1/spec/
---ignore=bundler/helpers/v2/spec/
+--ignore=bun/spec/
+--ignore=bundler/helpers
 --ignore=bundler/spec/
 --ignore=cargo/spec/
 --ignore=common/spec/
 --ignore=composer/spec/
+--ignore=devcontainers/spec/
 --ignore=docker/spec/
+--ignore=dotnet_sdk/spec/
 --ignore=elm/spec/
 --ignore=git_submodules/spec/
 --ignore=github_actions/spec/
@@ -27,3 +30,5 @@
 --ignore=swift/spec/
 --ignore=terraform/spec/
 --ignore=updater/spec/
+--ignore=uv/spec/
+--ignore=.git
