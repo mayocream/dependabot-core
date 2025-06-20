@@ -57,6 +57,13 @@ internal class GroupUpdateAllVersionsHandler : IUpdateHandler
     {
         foreach (var group in job.DependencyGroups)
         {
+            var existingGroupPr = job.ExistingGroupPullRequests.FirstOrDefault(pr => pr.DependencyGroupName == group.Name);
+            if (existingGroupPr is not null)
+            {
+                logger.Info($"Existing pull request found for group {group.Name}.  Skipping pull request creation.");
+                continue;
+            }
+
             logger.Info($"Starting update for group {group.Name}");
             var groupMatcher = group.GetGroupMatcher();
             var updateOperationsPerformed = new List<UpdateOperationBase>();
@@ -81,7 +88,7 @@ internal class GroupUpdateAllVersionsHandler : IUpdateHandler
                 var updateOperationsToPerform = RunWorker.GetUpdateOperations(discoveryResult).ToArray();
                 foreach (var (projectPath, dependency) in updateOperationsToPerform)
                 {
-                    if (dependency.IsTransitive)
+                    if (!job.IsUpdatePermitted(dependency))
                     {
                         continue;
                     }
@@ -91,9 +98,9 @@ internal class GroupUpdateAllVersionsHandler : IUpdateHandler
                         continue;
                     }
 
-                    if (job.IsDependencyIgnored(dependency.Name, dependency.Version!))
+                    if (job.IsDependencyIgnoredByNameOnly(dependency.Name))
                     {
-                        logger.Info($"Skipping ignored dependency {dependency.Name}/{dependency.Version}.");
+                        logger.Info($"Skipping ignored dependency {dependency.Name}.");
                         continue;
                     }
 
@@ -109,12 +116,6 @@ internal class GroupUpdateAllVersionsHandler : IUpdateHandler
                     if (!analysisResult.CanUpdate)
                     {
                         logger.Info($"No updatable version found for {dependency.Name} in {projectPath}.");
-                        continue;
-                    }
-
-                    if (dependencyInfo.IgnoredVersions.Any(ignored => ignored.IsSatisfiedBy(NuGetVersion.Parse(analysisResult.UpdatedVersion))))
-                    {
-                        logger.Info($"Cannot update {dependency.Name} for {projectPath} because all versions are ignored.");
                         continue;
                     }
 
@@ -134,7 +135,7 @@ internal class GroupUpdateAllVersionsHandler : IUpdateHandler
 
                     var patchedUpdateOperations = RunWorker.PatchInOldVersions(updaterResult.UpdateOperations, projectDiscovery);
                     var updatedDependenciesForThis = patchedUpdateOperations
-                        .Select(o => o.ToReportedDependency(updatedDependencyList.Dependencies, analysisResult.UpdatedDependencies))
+                        .Select(o => o.ToReportedDependency(projectPath, updatedDependencyList.Dependencies, analysisResult.UpdatedDependencies))
                         .ToArray();
 
                     updatedDependencies.AddRange(updatedDependenciesForThis);
@@ -191,14 +192,14 @@ internal class GroupUpdateAllVersionsHandler : IUpdateHandler
             var updateOperationsToPerform = RunWorker.GetUpdateOperations(discoveryResult).ToArray();
             foreach (var (projectPath, dependency) in updateOperationsToPerform)
             {
-                if (dependency.IsTransitive)
+                if (!job.IsUpdatePermitted(dependency))
                 {
                     continue;
                 }
 
-                if (job.IsDependencyIgnored(dependency.Name, dependency.Version!))
+                if (job.IsDependencyIgnoredByNameOnly(dependency.Name))
                 {
-                    logger.Info($"Skipping ignored dependency {dependency.Name}/{dependency.Version}.");
+                    logger.Info($"Skipping ignored dependency {dependency.Name}.");
                     continue;
                 }
 
@@ -217,12 +218,6 @@ internal class GroupUpdateAllVersionsHandler : IUpdateHandler
                     continue;
                 }
 
-                if (dependencyInfo.IgnoredVersions.Any(ignored => ignored.IsSatisfiedBy(NuGetVersion.Parse(analysisResult.UpdatedVersion))))
-                {
-                    logger.Info($"Cannot update {dependency.Name} for {projectPath} because all versions are ignored.");
-                    continue;
-                }
-
                 var projectDiscovery = discoveryResult.GetProjectDiscoveryFromPath(projectPath);
                 var updaterResult = await updaterWorker.RunAsync(repoContentsPath.FullName, projectPath, dependency.Name, dependency.Version!, analysisResult.UpdatedVersion, dependency.IsTransitive);
                 if (updaterResult.Error is not null)
@@ -238,8 +233,8 @@ internal class GroupUpdateAllVersionsHandler : IUpdateHandler
 
                 var patchedUpdateOperations = RunWorker.PatchInOldVersions(updaterResult.UpdateOperations, projectDiscovery);
                 var updatedDependenciesForThis = patchedUpdateOperations
-                        .Select(o => o.ToReportedDependency(updatedDependencyList.Dependencies, analysisResult.UpdatedDependencies))
-                        .ToArray();
+                    .Select(o => o.ToReportedDependency(projectPath, updatedDependencyList.Dependencies, analysisResult.UpdatedDependencies))
+                    .ToArray();
 
                 updatedDependencies.AddRange(updatedDependenciesForThis);
                 updateOperationsPerformed.AddRange(patchedUpdateOperations);
